@@ -143,8 +143,9 @@ class BaseDataset(ABC):
                 transformer = StandardScaler()
                 transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
             elif self.get_feature_type(feature_name) == "dynamic_continuous":
-                transformer = StandardScaler()
-                transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
+                # transformer = StandardScaler()
+                # transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
+                continue
             elif self.get_feature_type(feature_name) == 'categorical' or self.get_feature_type(feature_name) == 'binary':
                 if keep_categorical:
                     transformer = OrdinalEncoder(categories=[self.get_feature_ranges()[feature_name]])
@@ -384,7 +385,7 @@ class TTSDataset(torch.utils.data.Dataset):
         elif self.config.dataloader_type == 'tensor':
             return None
 
-class TTSDynamicDataset(torch.utils.data.Dataset):
+class TTSDynamicDataset(TTSDataset):
 
     def __init__(self, config, data):
         """
@@ -477,7 +478,14 @@ class TTSDynamicDataset(torch.utils.data.Dataset):
     def _process_data(self):
 
         self.X = torch.from_numpy(np.array(self.X)).float()
-        self.X_dynamic = torch.from_numpy(np.array(self.X_dynamic)).float()
+        dynamic_features = []
+        for col in self.X_dynamic.columns:
+            print([len(lst) for lst in self.X_dynamic.iloc[:, 0]])
+
+            feature_array = np.array(self.X_dynamic[col].tolist(), dtype=np.float32)
+            dynamic_features.append(feature_array)
+        X_dynamic = np.stack(dynamic_features, axis=1)
+        self.X_dynamic = torch.from_numpy(X_dynamic).float()
 
         self.D = self.X.shape[0]
         self.M = self.X.shape[1]

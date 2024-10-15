@@ -23,8 +23,8 @@ import sympy
 from xgboost import XGBRegressor
 import pysindy as ps
 
-from timeview.data import TTSDataset, create_dataloader, BaseDataset
-from timeview.config import TuningConfig, Config
+from timeview.data import TTSDataset, create_dataloader, BaseDataset, TTSDynamicDataset
+from timeview.config import TuningConfig, Config, DynamicConfig, DynamicTuningConfig
 from timeview.model import TTS
 from timeview.lit_module import LitTTS, LitTTSDynamic
 from timeview.knot_selection import calculate_knot_placement
@@ -1610,7 +1610,7 @@ class TTSDynamicBenchmark(BaseBenchmark):
     
     def get_model_for_tuning(self, trial, seed):
         """Get model for tuning."""
-        config = TuningConfig(
+        config = DynamicTuningConfig(
                             trial,
                             n_features=self.config.n_features,
                             n_features_dynamic=self.config.n_features_dynamic,
@@ -1636,11 +1636,10 @@ class TTSDynamicBenchmark(BaseBenchmark):
                 'dropout_p': parameters['dropout_p']
             }
             dynamic_encoder = {
-                'hidden_sizes': [parameters[f'dynamic_hidden_size_{i}'] for i in range(3)],
-                'activation': parameters.get('dynamic_activation', parameters['activation']),  # Dynamic features may have a different activation
-                'dropout_p': parameters.get('dynamic_dropout_p', parameters['dropout_p']),  # Dynamic features may have a different dropout
-                'rnn_type': parameters.get('rnn_type', 'lstm'),  # Type of RNN to use for dynamic features (LSTM, GRU, etc.)
-                'rnn_layers': parameters.get('rnn_layers', 2)  # Number of layers in the RNN
+                'hidden_sizes': parameters['dynamic_hidden_size'],
+                'dropout_p': parameters['dropout_p'],  # Dynamic features may have a different dropout
+                'rnn_type': parameters['rnn_type'],  # Type of RNN to use for dynamic features (LSTM, GRU, etc.)
+                'rnn_layers': parameters['rnn_layers']  # Number of layers in the RNN
             }
             training = {
                 'batch_size': parameters['batch_size'],
@@ -1653,7 +1652,7 @@ class TTSDynamicBenchmark(BaseBenchmark):
             else:
                 n_basis = self.config.n_basis
 
-            config = Config(n_features=self.config.n_features,
+            config = DynamicConfig(n_features=self.config.n_features,
                             n_features_dynamic=self.config.n_features_dynamic,
                             n_basis=n_basis,
                             T=self.config.T,
@@ -1695,28 +1694,15 @@ class TTSDynamicBenchmark(BaseBenchmark):
         y_normalizer = YNormalizer()
 
         self.X_train = transformer.fit_transform(self.X_train)
-
-        n_samples, n_time_steps, n_dynamic_features = self.X_dynamic_train.shape
-        X_dynamic_flat = self.X_dynamic_train.reshape(n_samples * n_time_steps, n_dynamic_features)
-        X_dynamic_flat_transformed = transformer.fit_transform(X_dynamic_flat)
-        self.X_dynamic_train = X_dynamic_flat_transformed.reshape(n_samples, n_time_steps, n_dynamic_features)
-
         self.ys_train = y_normalizer.fit_transform(self.ys_train)
-
         self.X_val = transformer.transform(self.X_val)
-
-        n_samples, n_time_steps, n_dynamic_features = self.X_dynamic_val.shape
-        X_dynamic_val_flat = self.X_dynamic_val.reshape(n_samples * n_time_steps, n_dynamic_features)
-        X_dynamic_val_flat_transformed = transformer.fit_transform(X_dynamic_val_flat)
-        self.X_dynamic_val = X_dynamic_val_flat_transformed.reshape(n_samples, n_time_steps, n_dynamic_features)
         self.ys_val = y_normalizer.transform(self.ys_val)
-
-        n_samples, n_time_steps, n_dynamic_features = self.X_dynamic_test.shape
-        X_dynamic_test_flat = self.X_dynamic_test.reshape(n_samples * n_time_steps, n_dynamic_features)
-        X_dynamic_test_flat_transformed = transformer.fit_transform(X_dynamic_test_flat)
-        self.X_dynamic_test = X_dynamic_test_flat_transformed.reshape(n_samples, n_time_steps, n_dynamic_features)
         self.X_test = transformer.transform(self.X_test)
         self.ys_test = y_normalizer.transform(self.ys_test)
+
+        # self.X_dynamic_train = self._transform_dynamic_features(self.X_dynamic_train, transformer)
+        # self.X_dynamic_val = self._transform_dynamic_features(self.X_dynamic_val, transformer)
+        # self.X_dynamic_test = self._transform_dynamic_features(self.X_dynamic_test, transformer)
 
         # Save the transformer using joblib
         os.makedirs(os.path.join(self.benchmarks_dir, self.name), exist_ok=True)
@@ -1740,9 +1726,61 @@ class TTSDynamicBenchmark(BaseBenchmark):
 
                 self.config.internal_knots = internal_knots
 
-            self.train_dataset = TTSDataset(self.config, (self.X_train, self.X_dynamic_train, self.ts_train, self.ys_train))
-            self.val_dataset = TTSDataset(self.config, (self.X_val, self.X_dynamic_val, self.ts_val, self.ys_val))
-            self.test_dataset = TTSDataset(self.config, (self.X_test, self.X_dynamic_test, self.ts_test, self.ys_test))
+            self.train_dataset = TTSDynamicDataset(self.config, (self.X_train, self.X_dynamic_train, self.ts_train, self.ys_train))
+            self.val_dataset = TTSDynamicDataset(self.config, (self.X_val, self.X_dynamic_val, self.ts_val, self.ys_val))
+            self.test_dataset = TTSDynamicDataset(self.config, (self.X_test, self.X_dynamic_test, self.ts_test, self.ys_test))
+
+    def _transform_dynamic_features(self, X_dynamic, transformer):
+        """
+        Transforms dynamic features by applying a transformer (like StandardScaler) on each feature's time steps.
+        Args:
+            X_dynamic: DataFrame where each column is a list of time steps for each feature.
+            transformer: Transformer to apply to each dynamic feature.
+        Returns:
+            Transformed dynamic features as a DataFrame with the same structure.
+        """
+        transformed_dynamic_features = pd.DataFrame()
+
+        for col in X_dynamic.columns:
+            # Flatten the time steps from each list into 2D: (n_samples * n_time_steps, 1)
+            flattened_feature = np.vstack(X_dynamic[col].values)
+            
+            # Apply the transformer to the flattened feature
+            transformed_feature = transformer.fit_transform(flattened_feature)
+            
+            # Reshape back into the original structure (n_samples, n_time_steps) as a list of time steps
+            reshaped_feature = [transformed_feature[i * len(X_dynamic[col].iloc[0]): (i + 1) * len(X_dynamic[col].iloc[0])].tolist() for i in range(len(X_dynamic))]
+            
+            # Store the transformed dynamic feature back into the DataFrame
+            transformed_dynamic_features[col] = reshaped_feature
+        
+        return transformed_dynamic_features
+    
+    def _transform_dynamic_features(self, X_dynamic, transformer):
+        # Loop through each column of dynamic features (each contains lists of time steps)
+        transformed_cols = []
+        
+        for col in X_dynamic.columns:
+            # Flatten the list of time steps into a 2D array (n_samples * n_time_steps, 1)
+            feature_flat = np.concatenate(X_dynamic[col].values).reshape(-1, 1)
+            
+            # Apply the transformation to the flattened array
+            feature_transformed_flat = transformer.fit_transform(feature_flat)
+            
+            # Reshape the flattened transformed data back into lists of time steps
+            feature_transformed = np.split(feature_transformed_flat.flatten(), X_dynamic.shape[0])
+            
+            transformed_cols.append(feature_transformed)
+        
+        # Convert back into a DataFrame with lists in each row
+        X_dynamic_transformed = pd.DataFrame({
+            'blood_pressure': transformed_cols[0],
+            'oxygen_saturation': transformed_cols[1],
+            'glucose_levels': transformed_cols[2]
+        })
+        
+        return X_dynamic_transformed
+
         
 
     def train(self, model, tuning=False):

@@ -10,5 +10,6 @@ else
 fi
 
 # python benchmark.py --datasets sine_trans_200_20 beta_900_20 --baselines TTS --n_trials 10 --n_tune $n_tune --seed 0 --device gpu --n_basis 5 --rnn_type lstm
-python benchmark.py --datasets synthetic_tumor_wilkerson_1 --baselines TTS --n_trials 1 --n_tune $n_tune --seed 0 --device gpu --n_basis 9 --rnn_type lstm
+# python benchmark.py --datasets synthetic_tumor_wilkerson_1 --baselines TTS --n_trials 1 --n_tune $n_tune --seed 0 --device gpu --n_basis 9 --rnn_type lstm
+python benchmark.py --datasets synthetic_tumor_wilkerson_dynamic_1 --baselines TTSDynamic --n_trials 1 --n_tune $n_tune --seed 0 --device gpu --n_basis 9 --rnn_type lstm
 

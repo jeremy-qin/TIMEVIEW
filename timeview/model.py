@@ -110,6 +110,7 @@ class DynamicEncoder(torch.nn.Module):
             Latent representation of dynamic features
         """
         # Pass the input through the RNN (LSTM or GRU)
+        x = x.transpose(1,2)
         rnn_output, (h_n, c_n) = self.rnn(x) if self.rnn_type == 'lstm' else self.rnn(x)
 
         # We use the last hidden state (h_n) from the RNN layers as the representation
@@ -271,7 +272,7 @@ class TTSDynamic(torch.nn.Module):
                 output = torch.matmul(Phis,torch.unsqueeze(h_combined,-1)).squeeze(-1) + self.bias
         
         if contrastive:
-            return output, contrastive
+            return output, contrastive_loss
         else:
             return output
             

@@ -169,8 +169,8 @@ class LitTTSDynamic(pl.LightningModule):
             total_loss = loss + self.contrastive_loss_weight * contrastive_loss
 
         elif self.config.dataloader_type == 'tensor':
-            batch_X, batch_Phi, batch_y, batch_N = batch
-            pred = self.model(batch_X, batch_Phi)
+            batch_X, batch_X_dynamic, batch_Phi, batch_y, batch_N = batch
+            pred, contrastive_loss = self.model(batch_X, batch_X_dynamic, batch_Phi)
             loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
                              dim=1) / batch_N) / batch_X.shape[0]
             total_loss = loss + self.contrastive_loss_weight * contrastive_loss
@@ -190,7 +190,7 @@ class LitTTSDynamic(pl.LightningModule):
 
         elif self.config.dataloader_type == 'tensor':
             batch_X, batch_X_dynamic, batch_Phi, batch_y, batch_N = batch
-            pred, _ = self.model(batch_X, batch_Phi)
+            pred, _ = self.model(batch_X, batch_X_dynamic, batch_Phi)
             loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
                              dim=1) / batch_N) / batch_X.shape[0]
 
@@ -209,7 +209,7 @@ class LitTTSDynamic(pl.LightningModule):
 
         elif self.config.dataloader_type == 'tensor':
             batch_X, batch_X_dynamic, batch_Phi, batch_y, batch_N = batch
-            pred = self.model(batch_X, batch_X_dynamic, batch_Phi)
+            pred, _ = self.model(batch_X, batch_X_dynamic, batch_Phi)
             loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
                              dim=1) / batch_N) / batch_X.shape[0]
 

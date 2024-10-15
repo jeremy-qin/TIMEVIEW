@@ -781,7 +781,14 @@ class SyntheticTumorDataset(BaseDataset):
             self.X = pd.DataFrame(X, columns=["age", "weight", "initial_tumor_volume", "start_time", "dosage"])
         elif self.args.equation == "wilkerson_dynamic":
             self.X = pd.DataFrame(X, columns=["age", "weight", "initial_tumor_volume", "dosage"])
-            self.X_dynamic = pd.DataFrame(X_dynamic, columns=["blood_pressure", "oxygen_saturation", "glucose_levels"])
+            blood_pressure_col = [X_dynamic[i, :, 0].tolist() for i in range(X_dynamic.shape[0])]
+            oxygen_saturation_col = [X_dynamic[i, :, 1].tolist() for i in range(X_dynamic.shape[0])]
+            glucose_levels_col = [X_dynamic[i, :, 2].tolist() for i in range(X_dynamic.shape[0])]
+            self.X_dynamic = pd.DataFrame({
+                'blood_pressure': blood_pressure_col,
+                'oxygen_saturation': oxygen_saturation_col,
+                'glucose_levels': glucose_levels_col
+            })
 
         self.ts = ts
         self.ys = ys
@@ -1035,7 +1042,7 @@ class SyntheticTumorDataset(BaseDataset):
         if equation == "wilkerson_dynamic":
             blood_pressure = gen.normal(
                 TUMOR_DATA_FEATURE_RANGES['blood_pressure'][0], TUMOR_DATA_FEATURE_RANGES['blood_pressure'][1], size=(n_samples, TUMOR_DATA_FEATURE_RANGES['blood_pressure'][2]))
-            oxygen_saturation = gen.uniform(
+            oxygen_saturation = gen.normal(
                 TUMOR_DATA_FEATURE_RANGES['oxygen_saturation'][0], TUMOR_DATA_FEATURE_RANGES['oxygen_saturation'][1], size=(n_samples, TUMOR_DATA_FEATURE_RANGES['oxygen_saturation'][2]))
             glucose_levels = gen.normal(
                 TUMOR_DATA_FEATURE_RANGES['glucose_levels'][0], TUMOR_DATA_FEATURE_RANGES['glucose_levels'][1], size=(n_samples, TUMOR_DATA_FEATURE_RANGES['glucose_levels'][2]))
@@ -1047,7 +1054,7 @@ class SyntheticTumorDataset(BaseDataset):
         elif equation == "geng":
             X=np.stack((age, weight, tumor_volume, start_time, dosage), axis=1)
         elif equation == "wilkerson_dynamic":
-            X=np.stack((age, weight, tumor_volume, dosage))
+            X=np.stack((age, weight, tumor_volume, dosage), axis=1)
             X_dynamic = np.stack((blood_pressure, oxygen_saturation, glucose_levels), axis=2)
 
         # Create the time points
@@ -1066,9 +1073,9 @@ class SyntheticTumorDataset(BaseDataset):
                 age, weight, tumor_volume, start_time, dosage=X[i, :]
             elif equation == "wilkerson_dynamic":
                 age, weight, tumor_volume, dosage = X[i, :]
-                blood_pressure_i = X_dynamic['blood_pressure'][i, :, 0]
-                oxygen_saturation_i = X_dynamic['oxygen_saturation'][i, :, 1]
-                glucose_levels_i = X_dynamic['glucose_levels'][i, :, 2]
+                blood_pressure_i = X_dynamic[i, :, 0]
+                oxygen_saturation_i = X_dynamic[i, :, 1]
+                glucose_levels_i = X_dynamic[i, :, 2]
 
             if equation == "wilkerson":
                 ys.append(SyntheticTumorDataset._tumor_volume_2(

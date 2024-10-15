@@ -18,7 +18,7 @@ from interpret.glassbox import ExplainableBoostingRegressor
 from xgboost import XGBRegressor
 
 from timeview.data import TTSDataset, create_dataloader, BaseDataset
-from timeview.config import TuningConfig, Config
+from timeview.config import TuningConfig, Config, DynamicConfig
 from timeview.model import TTS
 from timeview.lit_module import LitTTS
 import pytorch_lightning as pl
@@ -446,7 +446,7 @@ if __name__ == "__main__":
                 tts_config = Config(n_features=tts_n_features[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
                 benchmarks['TTS'] = {'config': tts_config}
             if 'TTSDynamic' in args.baselines:
-                tts_config = Config(n_features=tts_n_features[dataset_name], n_features_dynamic=tts_n_features_dynamic[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
+                tts_config = DynamicConfig(n_features=tts_n_features[dataset_name], n_features_dynamic=tts_n_features_dynamic[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
                 benchmarks['TTSDynamic'] = {'config': tts_config}
             if 'XGB' in args.baselines:
                 benchmarks['XGB'] = {}
@@ -492,7 +492,7 @@ if __name__ == "__main__":
             tts_config = Config(n_features=tts_n_features[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
             benchmarks['TTS'] = {'config': tts_config}
         if 'TTSDynamic' in args.baselines:
-                tts_config = Config(n_features=tts_n_features[dataset_name], n_features_dynamic=tts_n_features_dynamic[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
+                tts_config = DynamicConfig(n_features=tts_n_features[dataset_name], n_features_dynamic=tts_n_features_dynamic[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
                 benchmarks['TTSDynamic'] = {'config': tts_config}
         if 'XGB' in args.baselines:
             benchmarks['XGB'] = {}
