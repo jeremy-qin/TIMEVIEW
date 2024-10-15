@@ -97,7 +97,10 @@ class BaseDataset(ABC):
         for feature_name in feature_ranges:
             feature_range = feature_ranges[feature_name]
             if isinstance(feature_range, tuple):
-                feature_types[feature_name] = 'continuous'
+                if len(feature_range) == 3:
+                    feature_types[feature_name] = 'dynamic_continuous'
+                else:
+                    feature_types[feature_name] = 'continuous'
             elif isinstance(feature_range, list):
                 if len(feature_range) > 2:
                     feature_types[feature_name] = 'categorical'
@@ -115,7 +118,10 @@ class BaseDataset(ABC):
         """
         feature_range = self.get_feature_ranges()[feature_name]
         if isinstance(feature_range, tuple):
-            return 'continuous'
+            if len(feature_range) == 3:
+                return 'dynamic_continuous'
+            else:
+                return 'continuous'
         elif isinstance(feature_range, list):
             if len(feature_range) > 2:
                 return 'categorical'
@@ -130,16 +136,22 @@ class BaseDataset(ABC):
             a sklearn ColumnTransformer object
         """
         transformers = []
+        current_col_index = 0
+
         for feature_index, feature_name in enumerate(self.get_feature_names()):
             if self.get_feature_type(feature_name) == 'continuous':
                 transformer = StandardScaler()
+                transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
+            elif self.get_feature_type(feature_name) == "dynamic_continuous":
+                transformer = StandardScaler()
+                transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
             elif self.get_feature_type(feature_name) == 'categorical' or self.get_feature_type(feature_name) == 'binary':
                 if keep_categorical:
                     transformer = OrdinalEncoder(categories=[self.get_feature_ranges()[feature_name]])
                 else:
                     transformer = OneHotEncoder(categories=[self.get_feature_ranges()[feature_name]],sparse_output=False,drop='if_binary')
-            transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
-        transformer = ColumnTransformer(transformers=transformers, remainder='passthrough') # The remainder option is needed to pass the time column for static methods
+                transformers.append((f"{feature_name}_transformer", transformer, [feature_index]))
+            transformer = ColumnTransformer(transformers=transformers, remainder='passthrough') # The remainder option is needed to pass the time column for static methods
         return transformer
 
 class XTYDataset(BaseDataset):
@@ -175,6 +187,23 @@ def _validate_data(X, ts, ys, T):
         T: a real number that is the time horizon
     """
     assert X.shape[0] == len(ts) == len(ys)
+    for i in range(len(ts)):
+        assert len(ts[i].shape) == len(ys[i].shape) == 1
+        assert ts[i].shape[0] == ys[i].shape[0]
+        assert ts[i].max() <= T
+        assert ts[i].min() >= 0
+
+def _validate_data_dynamic(X, X_dynamic, ts, ys, T):
+    """
+    This function verifies that the data is valid
+    Args:
+        X: numpy array of shape (D,M) where D is the number of samples and M is the number of static features
+        ts: a list of D 1D numpy arrays of shape (N_i,) where T_i is the number of time steps for the i-th sample
+        ys: a list of D 1D numpy arrays of shape (N_i,) where T_i is the number of time steps for the i-th sample
+        T: a real number that is the time horizon
+    """
+    assert X.shape[0] == len(ts) == len(ys)
+    assert X_dynamic.shape[0] == len(ts)
     for i in range(len(ts)):
         assert len(ts[i].shape) == len(ys[i].shape) == 1
         assert ts[i].shape[0] == ys[i].shape[0]
@@ -349,6 +378,159 @@ class TTSDataset(torch.utils.data.Dataset):
                 ts.append(b[1])
                 ys.append(b[2])
             return torch.stack(Xs, dim=0), ts, ys
+
+        if self.config.dataloader_type == 'iterative':
+            return iterative_collate_fn
+        elif self.config.dataloader_type == 'tensor':
+            return None
+
+class TTSDynamicDataset(torch.utils.data.Dataset):
+
+    def __init__(self, config, data):
+        """
+        This constructor is helpful when you have irregularly sampled trajectories.
+        Args:
+            config: an instance of the Config class
+            data: data can be any of the following:
+                tuple (X,ts,ys), where
+                    X: numpy array of shape (D,M) where D is the number of samples and M is the number of static features
+                    ts: a list of D 1D numpy arrays of shape (N_i,) where N_i is the number of time steps for the i-th sample
+                    ys: a list of D 1D numpy arrays of shape (N_i,) where N_i is the number of time steps for the i-th sample
+                tuple (df_static,df_trajectories), where
+                    df_static: a pandas dataframe with columns ['id','x1','x2',...,'xM'] corresponding to the static features
+                    df_trajectories: a pandas dataframe with columns ['id','t','y']
+                single dataframe df with columns ['id','x1','x2',...,'xM','t','y'] where the first M columns correspond to the static features and the last two columns correspond to the trajectories
+            T: a real number that is the time horizon
+        """
+        self.config = config
+        T = config.T
+        if isinstance(data, pd.DataFrame):
+            self._save_data(*self._extract_data_from_one_dataframe(data), T)
+        elif isinstance(data, tuple):
+            if len(data) == 2:
+                self._save_data(
+                    *self._extract_data_from_two_dataframes(data[0], data[1]), T)
+            elif len(data) == 3:
+                _validate_data(data[0], data[1], data[2], T)
+                self._save_data(data[0], data[1], data[2], T)
+            elif len(data) == 4:
+                _validate_data_dynamic(data[0], data[1], data[2], data[3], T)
+                self._save_data(data[0], data[1], data[2], data[3], T)
+
+        self._process_data()
+
+    def _extract_data_from_two_dataframes(self, df_static, df_trajectories):
+        """
+        This function extracts the data from two dataframes
+        Args:
+            df_static: a pandas dataframe with columns ['id','x1','x2',...,'xM'] corresponding to the static features
+            df_trajectories: a pandas dataframe with columns ['id','t','y']
+        """
+        ids = df_static['id'].unique()
+        X = []
+        ts = []
+        ys = []
+        for id in ids:
+            df_static_id = df_static[df_static['id'] == id]
+            # there should be only one row for each id
+            assert df_static_id.shape[0] == 1
+            X.append(df_static_id[0, 1:].values.astype(
+                np.float32).reshape(1, -1))
+            df_trajectories_id = df_trajectories[df_trajectories['id'] == id].copy(
+            )
+            df_trajectories_id.sort_values(by='t', inplace=True)
+            ts.append(df_trajectories_id['t'].values.reshape(-1))
+            ys.append(df_trajectories_id['y'].values.reshape(-1))
+        X = np.concatenate(X, axis=0)
+        return [X, ts, ys]
+
+    def _extract_data_from_one_dataframe(self, df):
+        """
+        This function extracts the data from one dataframe
+        Args:
+              df a pandas dataframe with columns ['id','x1','x2',...,'xM','t','y'] where the first M columns are the static features and the last two columns are the time and the observation
+        """
+        # TODO: Validate data
+
+        ids = df['id'].unique()
+        X = []
+        ts = []
+        ys = []
+        for id in ids:
+            df_id = df[df['id'] == id].copy()
+            X.append(
+                df_id.iloc[0, 1:-2].values.astype(np.float32).reshape(1, -1))
+            # print(X)
+            df_id.sort_values(by='t', inplace=True)
+            ts.append(df_id['t'].values.reshape(-1))
+            ys.append(df_id['y'].values.reshape(-1))
+        X = np.concatenate(X, axis=0)
+        return [X, ts, ys]
+
+    def _save_data(self, X, X_dynamic, ts, ys, T):
+        self.X = X
+        self.X_dynamic = X_dynamic
+        self.ts = ts
+        self.ys = ys
+        self.T = T
+
+    def _process_data(self):
+
+        self.X = torch.from_numpy(np.array(self.X)).float()
+        self.X_dynamic = torch.from_numpy(np.array(self.X_dynamic)).float()
+
+        self.D = self.X.shape[0]
+        self.M = self.X.shape[1]
+        self.Ns = [self.ts[i].shape[0] for i in range(len(self.ts))]
+        self.N_max = max(self.Ns)
+
+        self.Phis = self._compute_matrices()
+
+        if self.config.dataloader_type == 'tensor':
+            # We pad ys and stack into a tensor
+            self.Y = torch.stack([torch.from_numpy(_pad_to_shape(
+                y, (self.N_max,))).float() for y in self.ys], dim=0)
+            # We pad Phis and stack into a tensor
+            self.PHI = torch.stack([torch.from_numpy(_pad_to_shape(
+                Phi, (self.N_max, self.config.n_basis))).float() for Phi in self.Phis], dim=0)
+            # We turn Ns into a tensor
+            self.NS = torch.tensor(self.Ns)
+
+        elif self.config.dataloader_type == 'iterative':
+            # Convert Phi to a list of tensors
+            self.Phis = [torch.from_numpy(Phi).float() for Phi in self.Phis]
+            # Convert ys to a list of tensors
+            self.ys = [torch.from_numpy(y).float() for y in self.ys]
+
+    def _compute_matrices(self):
+        bspline = BSplineBasis(self.config.n_basis, (0, self.T), internal_knots=self.config.internal_knots)
+        Phis = list(bspline.get_all_matrices(self.ts))
+        return Phis
+
+    def __len__(self):
+        return self.D
+
+    def __getitem__(self, idx):
+        if self.config.dataloader_type == 'iterative':
+            return self.X[idx, :], self.X_dynamic[idx, :], self.Phis[idx], self.ys[idx]
+        elif self.config.dataloader_type == 'tensor':
+            return self.X[idx, :], self.X_dynamic[idx, :], self.PHI[idx, :, :], self.Y[idx, :], self.NS[idx]
+
+    def get_collate_fn(self):
+
+        def iterative_collate_fn(batch):
+            Xs = []
+            Xs_dynamic = []
+            ts = []
+            ys = []
+            for b in batch:
+                Xs.append(b[0])
+                Xs_dynamic.append(b[1])
+                ts.append(b[2])
+                ys.append(b[3])
+            Xs_tensor = torch.stack(Xs, dim=0)
+            Xs_dynamic_tensor = torch.stack(Xs_dynamic, dim=0) 
+            return Xs_tensor, Xs_dynamic_tensor, ts, ys
 
         if self.config.dataloader_type == 'iterative':
             return iterative_collate_fn

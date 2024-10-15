@@ -26,7 +26,7 @@ import pysindy as ps
 from timeview.data import TTSDataset, create_dataloader, BaseDataset
 from timeview.config import TuningConfig, Config
 from timeview.model import TTS
-from timeview.lit_module import LitTTS
+from timeview.lit_module import LitTTS, LitTTSDynamic
 from timeview.knot_selection import calculate_knot_placement
 import pytorch_lightning as pl
 import torch
@@ -1493,6 +1493,256 @@ class TTSBenchmark(BaseBenchmark):
             self.train_dataset = TTSDataset(self.config, (self.X_train, self.ts_train, self.ys_train))
             self.val_dataset = TTSDataset(self.config, (self.X_val, self.ts_val, self.ys_val))
             self.test_dataset = TTSDataset(self.config, (self.X_test, self.ts_test, self.ys_test))
+        
+
+    def train(self, model, tuning=False):
+        """Train model."""
+        if tuning:
+            tuning_callback = model[1]
+            model = model[0]
+            log_dir = os.path.join(self.benchmarks_dir, self.name, 'tuning', 'logs', f'seed_{model.config.seed}')
+        else:
+            log_dir =  os.path.join(self.benchmarks_dir, self.name, 'final', 'logs', f'seed_{model.config.seed}')
+
+        if self.config.n_basis_tunable:
+            # We need to create the datasets here becuase we could not do it in prepare_data
+            
+            # We need to find the internal knots
+            n_internal_knots = model.config.n_basis - 2
+            internal_knots = calculate_knot_placement(self.ts_train, self.ys_train, n_internal_knots, T=model.config.T, seed=self.config.seed)
+            print(f'Found internal knots: {internal_knots}')
+
+            model.config.internal_knots = internal_knots
+
+            train_dataset = TTSDataset(model.config, (self.X_train, self.ts_train, self.ys_train))
+            val_dataset = TTSDataset(model.config, (self.X_val, self.ts_val, self.ys_val))
+            test_dataset = TTSDataset(model.config, (self.X_test, self.ts_test, self.ys_test))
+        else:
+            train_dataset = self.train_dataset
+            val_dataset = self.val_dataset
+            test_dataset = self.test_dataset
+
+        
+        tb_logger = pl.loggers.TensorBoardLogger(save_dir=log_dir)
+
+        # Create folder if does not exist
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        # Save config as a pickle file
+        config = model.config
+
+        if not tuning:
+            with open(os.path.join(log_dir, 'config.pkl'), 'wb') as f:
+                pickle.dump(config, f)
+        
+
+        
+        # create callbacks
+        best_val_checkpoint = pl.callbacks.ModelCheckpoint(
+            monitor='val_loss',
+            mode='min',
+            save_top_k=1,
+            filename='best_val'
+        )
+        # added early stopping callback, if validation loss does not improve over 10 epochs -> terminate training.
+        early_stop_callback = pl.callbacks.EarlyStopping(
+            monitor='val_loss',
+            min_delta=0,
+            patience=10,
+            verbose=False,
+            mode='min'
+        )
+        callback_ls = [best_val_checkpoint, early_stop_callback]
+
+        # add additional callback for optuna hyperopt
+        # if tuning:
+        #     callback_ls.append(tuning_callback)
+        
+        trainer_dict = {
+            'deterministic': True,
+            'devices': 1,
+            'enable_model_summary': False,
+            'enable_progress_bar': False,
+            'accelerator': config.device,
+            'max_epochs': config.num_epochs,
+            'logger': tb_logger,
+            'check_val_every_n_epoch': 10,
+            'log_every_n_steps': 1,
+            'callbacks': callback_ls
+        }
+
+        trainer = pl.Trainer(**trainer_dict)
+
+        train_dataloader = create_dataloader(model.config, train_dataset, None, shuffle=True)
+        val_dataloader = create_dataloader(model.config, val_dataset, None, shuffle=False)
+        test_dataloader = create_dataloader(model.config, test_dataset, None, shuffle=False)
+    
+
+        trainer.fit(
+        model=model,
+        train_dataloaders=train_dataloader,
+        val_dataloaders=val_dataloader)
+
+        print(f"Finished after {trainer.current_epoch} epochs.")
+
+        train_loss = trainer.logged_metrics['train_loss']
+        print(f"train_loss: {train_loss}")
+        val_loss = early_stop_callback.best_score
+        test_loss = 0
+
+        if not tuning:
+            results = trainer.test(model=model, dataloaders=test_dataloader)
+            test_loss = results[0]['test_loss']
+
+        return {'train_loss': train_loss, 'val_loss': val_loss, 'test_loss': test_loss}
+    
+
+class TTSDynamicBenchmark(BaseBenchmark):
+    """TTSDynamic benchmark."""
+
+    def __init__(self, config):
+        self.config = config
+        super().__init__()
+
+    def get_name(self):
+        return 'TTSDynamic'
+    
+    def get_model_for_tuning(self, trial, seed):
+        """Get model for tuning."""
+        config = TuningConfig(
+                            trial,
+                            n_features=self.config.n_features,
+                            n_features_dynamic=self.config.n_features_dynamic,
+                            n_basis=self.config.n_basis,
+                            T=self.config.T,
+                            seed=self.config.seed,
+                            device=self.config.device,
+                            num_epochs=self.config.num_epochs,
+                            dataloader_type=self.config.dataloader_type,
+                            internal_knots=self.config.internal_knots,
+                            n_basis_tunable=self.config.n_basis_tunable,
+                            dynamic_bias=self.config.dynamic_bias)
+        litmodel = LitTTSDynamic(config)
+        tuning_callback = PyTorchLightningPruningCallback(trial, monitor='val_loss')
+        return (litmodel, tuning_callback)
+       
+    def get_final_model(self, parameters, seed):
+        """Get model for testing."""
+        if parameters is not None:
+            encoder = {
+                'hidden_sizes': [parameters[f'hidden_size_{i}'] for i in range(3)],
+                'activation': parameters['activation'],
+                'dropout_p': parameters['dropout_p']
+            }
+            dynamic_encoder = {
+                'hidden_sizes': [parameters[f'dynamic_hidden_size_{i}'] for i in range(3)],
+                'activation': parameters.get('dynamic_activation', parameters['activation']),  # Dynamic features may have a different activation
+                'dropout_p': parameters.get('dynamic_dropout_p', parameters['dropout_p']),  # Dynamic features may have a different dropout
+                'rnn_type': parameters.get('rnn_type', 'lstm'),  # Type of RNN to use for dynamic features (LSTM, GRU, etc.)
+                'rnn_layers': parameters.get('rnn_layers', 2)  # Number of layers in the RNN
+            }
+            training = {
+                'batch_size': parameters['batch_size'],
+                'lr': parameters['lr'],
+                'weight_decay': parameters['weight_decay'],
+                'optimizer': 'adam'
+            }
+            if self.config.n_basis_tunable:
+                n_basis = parameters['n_basis']
+            else:
+                n_basis = self.config.n_basis
+
+            config = Config(n_features=self.config.n_features,
+                            n_features_dynamic=self.config.n_features_dynamic,
+                            n_basis=n_basis,
+                            T=self.config.T,
+                            seed=seed,
+                            encoder=encoder,
+                            dynamic_encoder=dynamic_encoder,
+                            training=training,
+                            dataloader_type=self.config.dataloader_type,
+                            device=self.config.device,
+                            num_epochs=self.config.num_epochs,
+                            internal_knots=self.config.internal_knots,
+                            n_basis_tunable=self.config.n_basis_tunable,
+                            dynamic_bias=self.config.dynamic_bias
+                            )
+        else:
+            config = self.config
+
+        litmodel = LitTTSDynamic(config)
+        return litmodel
+
+    def prepare_data(self, dataset: BaseDataset, train_indices, val_indices, test_indices):
+        X, X_dynamic, ts, ys = dataset.get_X_ts_ys()
+
+        self.X_train = X.iloc[train_indices,:]
+        self.X_dynamic_train = X_dynamic.iloc[train_indices, :] 
+        self.ts_train = [ts[i] for i in train_indices]
+        self.ys_train = [ys[i] for i in train_indices]
+        self.X_val = X.iloc[val_indices,:]
+        self.X_dynamic_val = X_dynamic.iloc[val_indices, :] 
+        self.ts_val = [ts[i] for i in val_indices]
+        self.ys_val = [ys[i] for i in val_indices]
+        self.X_test = X.iloc[test_indices,:]
+        self.X_dynamic_test = X_dynamic.iloc[test_indices,:]
+        self.ts_test = [ts[i] for i in test_indices]
+        self.ys_test = [ys[i] for i in test_indices]
+
+        # Transform the data
+        transformer = dataset.get_default_column_transformer()
+        y_normalizer = YNormalizer()
+
+        self.X_train = transformer.fit_transform(self.X_train)
+
+        n_samples, n_time_steps, n_dynamic_features = self.X_dynamic_train.shape
+        X_dynamic_flat = self.X_dynamic_train.reshape(n_samples * n_time_steps, n_dynamic_features)
+        X_dynamic_flat_transformed = transformer.fit_transform(X_dynamic_flat)
+        self.X_dynamic_train = X_dynamic_flat_transformed.reshape(n_samples, n_time_steps, n_dynamic_features)
+
+        self.ys_train = y_normalizer.fit_transform(self.ys_train)
+
+        self.X_val = transformer.transform(self.X_val)
+
+        n_samples, n_time_steps, n_dynamic_features = self.X_dynamic_val.shape
+        X_dynamic_val_flat = self.X_dynamic_val.reshape(n_samples * n_time_steps, n_dynamic_features)
+        X_dynamic_val_flat_transformed = transformer.fit_transform(X_dynamic_val_flat)
+        self.X_dynamic_val = X_dynamic_val_flat_transformed.reshape(n_samples, n_time_steps, n_dynamic_features)
+        self.ys_val = y_normalizer.transform(self.ys_val)
+
+        n_samples, n_time_steps, n_dynamic_features = self.X_dynamic_test.shape
+        X_dynamic_test_flat = self.X_dynamic_test.reshape(n_samples * n_time_steps, n_dynamic_features)
+        X_dynamic_test_flat_transformed = transformer.fit_transform(X_dynamic_test_flat)
+        self.X_dynamic_test = X_dynamic_test_flat_transformed.reshape(n_samples, n_time_steps, n_dynamic_features)
+        self.X_test = transformer.transform(self.X_test)
+        self.ys_test = y_normalizer.transform(self.ys_test)
+
+        # Save the transformer using joblib
+        os.makedirs(os.path.join(self.benchmarks_dir, self.name), exist_ok=True)
+        joblib.dump(transformer, os.path.join(self.benchmarks_dir, self.name, 'column_transformer.joblib'))
+
+        # Save y_normalizer
+        y_normalizer.save(os.path.join(self.benchmarks_dir, self.name))
+
+        if self.config.n_basis_tunable:
+            # That means that we cannot precompute the internal knots and instantiate the datasets
+            # Instead we will have to do it in the train function
+            return
+        else: 
+            if self.config.internal_knots is None:
+                # We need to find the internal knots
+
+                n_internal_knots = self.config.n_basis - 2
+
+                internal_knots = calculate_knot_placement(self.ts_train, self.ys_train, n_internal_knots, T=self.config.T, seed=self.config.seed)
+                print(f'Found internal knots: {internal_knots}')
+
+                self.config.internal_knots = internal_knots
+
+            self.train_dataset = TTSDataset(self.config, (self.X_train, self.X_dynamic_train, self.ts_train, self.ys_train))
+            self.val_dataset = TTSDataset(self.config, (self.X_val, self.X_dynamic_val, self.ts_val, self.ys_val))
+            self.test_dataset = TTSDataset(self.config, (self.X_test, self.X_dynamic_test, self.ts_test, self.ys_test))
         
 
     def train(self, model, tuning=False):

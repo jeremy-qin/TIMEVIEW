@@ -86,6 +86,17 @@ def create_benchmark_datasets_if_not_exist(dataset_description_path='dataset_des
             'equation': 'wilkerson'}
         },
         {
+        'dataset_name': 'synthetic_tumor_wilkerson_dynamic_1',
+        'dataset_builder': 'SyntheticTumorDataset',
+        'dataset_dictionary': {
+            'n_samples': 2000,
+            'n_time_steps': 20,
+            'time_horizon': 1.0,
+            'noise_std': 0.0,
+            'seed': 0,
+            'equation': 'wilkerson_dynamic'}
+        },
+        {
         'dataset_name': 'tumor',
         'dataset_builder': 'TumorDataset',
         'dataset_dictionary': {}
@@ -370,6 +381,7 @@ if __name__ == "__main__":
 
     tts_T = {
         'synthetic_tumor_wilkerson_1': 1.0,
+        'synthetic_tumor_wilkerson_dynamic_1': 1.0,
         'tumor': 1.0,
         'airfoil_log': 4.7,
         'celgene': 1.0,
@@ -382,6 +394,7 @@ if __name__ == "__main__":
 
     tts_n_features = {
         'synthetic_tumor_wilkerson_1': 4,
+        'synthetic_tumor_wilkerson_dynamic_1': 4,
         'tumor': 1,
         'airfoil_log': 4,
         'celgene': 11,
@@ -392,8 +405,13 @@ if __name__ == "__main__":
         'beta_900_20': 2
     }
 
+    tts_n_features_dynamic = {
+        'synthetic_tumor_wilkerson_dynamic_1': 3,
+    }
+
     rnn_max_len = {
         'synthetic_tumor_wilkerson_1': 20,
+        'synthetic_tumor_wilkerson_dynamic_1': 20,
         'tumor': 19,
         'airfoil_log': 19,
         'celgene': 7,
@@ -427,6 +445,9 @@ if __name__ == "__main__":
             if 'TTS' in args.baselines:
                 tts_config = Config(n_features=tts_n_features[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
                 benchmarks['TTS'] = {'config': tts_config}
+            if 'TTSDynamic' in args.baselines:
+                tts_config = Config(n_features=tts_n_features[dataset_name], n_features_dynamic=tts_n_features_dynamic[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
+                benchmarks['TTSDynamic'] = {'config': tts_config}
             if 'XGB' in args.baselines:
                 benchmarks['XGB'] = {}
             if 'GAM' in args.baselines:
@@ -470,6 +491,9 @@ if __name__ == "__main__":
         if 'TTS' in args.baselines:
             tts_config = Config(n_features=tts_n_features[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
             benchmarks['TTS'] = {'config': tts_config}
+        if 'TTSDynamic' in args.baselines:
+                tts_config = Config(n_features=tts_n_features[dataset_name], n_features_dynamic=tts_n_features_dynamic[dataset_name], n_basis=args.n_basis, T=tts_T[dataset_name], seed=global_seed, dataloader_type='tensor', num_epochs=1000, device=args.device, n_basis_tunable=n_basis_tunable, dynamic_bias=True)
+                benchmarks['TTSDynamic'] = {'config': tts_config}
         if 'XGB' in args.baselines:
             benchmarks['XGB'] = {}
         if 'GAM' in args.baselines:

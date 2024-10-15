@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import torch
 from .config import Config, OPTIMIZERS
-from .model import TTS
+from .model import TTS, TTSDynamic
 import glob
 import os
 import pickle
@@ -124,6 +124,92 @@ class LitTTS(pl.LightningModule):
         elif self.config.dataloader_type == 'tensor':
             batch_X, batch_Phi, batch_y, batch_N = batch
             pred = self.model(batch_X, batch_Phi)
+            loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
+                             dim=1) / batch_N) / batch_X.shape[0]
+
+        self.log('test_loss', loss)
+
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = OPTIMIZERS[self.config.training.optimizer](self.model.parameters(
+        ), lr=self.config.training.lr, weight_decay=self.config.training.weight_decay)
+        return optimizer
+
+class LitTTSDynamic(pl.LightningModule):
+
+    def __init__(self, config: Config):
+        super().__init__()
+        self.config = config
+        self.model = TTSDynamic(config)
+        self.loss_fn = torch.nn.MSELoss()
+        self.lr = self.config.training.lr
+        self.contrastive_loss_weight = 0.1
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        # def forward(self, batch, batch_idx, dataloader_idx=0):
+        if self.config.dataloader_type == 'iterative':
+            batch_X, batch_X_dynamic, batch_Phis, batch_ys = batch
+            preds, _ = self.model(batch_X, batch_X_dynamic, batch_Phis)  # list of tensors
+            return preds
+
+        elif self.config.dataloader_type == 'tensor':
+            batch_X, batch_X_dynamic, batch_Phi, batch_y, batch_N = batch
+            pred = self.model(batch_X, batch_X_dynamic, batch_Phi)
+            return pred  # 2D tensor
+
+    def training_step(self, batch, batch_idx):
+
+        if self.config.dataloader_type == 'iterative':
+            batch_X, batch_X_dynamic, batch_Phis, batch_ys = batch
+            preds, contrastive_loss = self.model(batch_X, batch_X_dynamic, batch_Phis)
+            losses = [self.loss_fn(pred, y)
+                      for pred, y in zip(preds, batch_ys)]
+            loss = torch.mean(torch.stack(losses))
+            total_loss = loss + self.contrastive_loss_weight * contrastive_loss
+
+        elif self.config.dataloader_type == 'tensor':
+            batch_X, batch_Phi, batch_y, batch_N = batch
+            pred = self.model(batch_X, batch_Phi)
+            loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
+                             dim=1) / batch_N) / batch_X.shape[0]
+            total_loss = loss + self.contrastive_loss_weight * contrastive_loss
+
+        self.log('train_loss', total_loss)
+
+        return total_loss
+
+    def validation_step(self, batch, batch_idx):
+
+        if self.config.dataloader_type == 'iterative':
+            batch_X, batch_X_dynamic, batch_Phis, batch_ys = batch
+            preds, _ = self.model(batch_X, batch_X_dynamic, batch_Phis)
+            losses = [self.loss_fn(pred, y)
+                      for pred, y in zip(preds, batch_ys)]
+            loss = torch.mean(torch.stack(losses))
+
+        elif self.config.dataloader_type == 'tensor':
+            batch_X, batch_X_dynamic, batch_Phi, batch_y, batch_N = batch
+            pred, _ = self.model(batch_X, batch_Phi)
+            loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
+                             dim=1) / batch_N) / batch_X.shape[0]
+
+        self.log('val_loss', loss)
+
+        return loss
+
+    def test_step(self, batch, batch_idx):
+
+        if self.config.dataloader_type == 'iterative':
+            batch_X, batch_X_dynamic, batch_Phis, batch_ys = batch
+            preds, _ = self.model(batch_X, batch_X_dynamic, batch_Phis)
+            losses = [self.loss_fn(pred, y)
+                      for pred, y in zip(preds, batch_ys)]
+            loss = torch.mean(torch.stack(losses))
+
+        elif self.config.dataloader_type == 'tensor':
+            batch_X, batch_X_dynamic, batch_Phi, batch_y, batch_N = batch
+            pred = self.model(batch_X, batch_X_dynamic, batch_Phi)
             loss = torch.sum(torch.sum(((pred - batch_y) ** 2),
                              dim=1) / batch_N) / batch_X.shape[0]
 

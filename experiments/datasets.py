@@ -759,23 +759,38 @@ class SyntheticTumorDataset(BaseDataset):
 
     def __init__(self, **args):
         super().__init__(**args)
-        X, ts, ys = SyntheticTumorDataset.synthetic_tumor_data(
+        if self.args.equation == "wilkerson_dynamic":
+            X, X_dynamic, ts, ys = SyntheticTumorDataset.synthetic_tumor_data(
                         n_samples = self.args.n_samples,
                         n_time_steps = self.args.n_time_steps,
                         time_horizon = self.args.time_horizon,
                         noise_std = self.args.noise_std,
                         seed = self.args.seed,
                         equation = self.args.equation)
+        else:
+            X, ts, ys = SyntheticTumorDataset.synthetic_tumor_data(
+                            n_samples = self.args.n_samples,
+                            n_time_steps = self.args.n_time_steps,
+                            time_horizon = self.args.time_horizon,
+                            noise_std = self.args.noise_std,
+                            seed = self.args.seed,
+                            equation = self.args.equation)
         if self.args.equation == "wilkerson":
             self.X = pd.DataFrame(X, columns=["age", "weight", "initial_tumor_volume", "dosage"])
         elif self.args.equation == "geng":
             self.X = pd.DataFrame(X, columns=["age", "weight", "initial_tumor_volume", "start_time", "dosage"])
+        elif self.args.equation == "wilkerson_dynamic":
+            self.X = pd.DataFrame(X, columns=["age", "weight", "initial_tumor_volume", "dosage"])
+            self.X_dynamic = pd.DataFrame(X_dynamic, columns=["blood_pressure", "oxygen_saturation", "glucose_levels"])
 
         self.ts = ts
         self.ys = ys
     
     def get_X_ts_ys(self):
-        return self.X, self.ts, self.ys
+        if self.args.equation == "wilkerson_dynamic":
+            return self.X, self.X_dynamic, self.ts, self.ys
+        else:
+            return self.X, self.ts, self.ys
 
     def __len__(self):
         return len(self.X)
@@ -786,7 +801,7 @@ class SyntheticTumorDataset(BaseDataset):
                 "age": (20, 80),
                 "weight": (40, 100),
                 "initial_tumor_volume": (0.1, 0.5),
-                "dosage": (0.0, 1.0)
+                "dosage": (0.0, 1.0),
                 }
         elif self.args.equation == "geng":
             return {
@@ -796,12 +811,24 @@ class SyntheticTumorDataset(BaseDataset):
                 "start_time": (0.0, 1.0),
                 "dosage": (0.0, 1.0)
                 }
+        elif self.args.equation == "wilkerson_dynamic":
+            return {
+                "age": (20, 80),
+                "weight": (40, 100),
+                "initial_tumor_volume": (0.1, 0.5),
+                "dosage": (0.0, 1.0),
+                "blood_pressure": (130, 15, 30),
+                "oxygen_saturation" : (93, 3, 30),
+                "glucose_levels": (120, 30, 30)
+                }
 
     def get_feature_names(self):
         if self.args.equation == "wilkerson":
             return ["age", "weight", "initial_tumor_volume", "dosage"]
         elif self.args.equation == "geng":
             return ["age", "weight", "initial_tumor_volume", "start_time", "dosage"]
+        elif self.args.equation == "wilkerson_dynamic":
+            return ["age", "weight", "initial_tumor_volume", "dosage", "blood_pressure", "oxygen_saturation", "glucose_levels"]
 
 
 
@@ -889,6 +916,41 @@ class SyntheticTumorDataset(BaseDataset):
         phi=1 / (1 + np.exp(-dosage*PHI_0))
 
         return initial_tumor_volume * (phi*np.exp(-d * t) + (1-phi)*np.exp(g * t))
+    
+    def _tumor_volume_3(t, age, weight, initial_tumor_volume, dosage, blood_pressure, oxygen_saturation, glucose_levels):
+        """
+        Computes the tumor volume at times t based on the tumor model under chemotherapy described in the paper.
+
+        Args:
+            t: numpy array of real numbers that are the times at which to compute the tumor volume
+            age: a real number that is the age
+            weight: a real number that is the weight
+            initial_tumor_volume: a real number that is the initial tumor volume
+            start_time: a real number that is the start time of chemotherapy
+            dosage: a real number that is the chemotherapy dosage
+        Returns:
+            Vs: numpy array of real numbers that are the tumor volumes at times t
+        """
+
+        G_0=2.0
+        D_0=180.0
+        PHI_0=10
+
+        # Set the parameters of the tumor model
+        # rho = RHO_0 * (age / 20.0) ** 0.5
+        # K = K_0 + K_1 * (weight)
+        # beta = BETA_0 * (age/20.0) ** (-0.2)
+        avg_bp = np.mean(blood_pressure)
+        avg_glucose = np.mean(glucose_levels)
+
+        g=G_0 * (age / 20.0) ** 0.5 * (1 + 0.01 * (avg_bp - 130)) * (1 + 0.01 * (avg_glucose - 120))
+
+        avg_spo2 = np.mean(oxygen_saturation)
+        d=D_0 * dosage/weight * (1 + 0.01 * (avg_spo2 - 93))
+        # sigmoid function
+        phi=1 / (1 + np.exp(-dosage*PHI_0))
+
+        return initial_tumor_volume * (phi*np.exp(-d * t) + (1-phi)*np.exp(g * t))
 
 
     def _get_tumor_feature_ranges(*feautures):
@@ -939,6 +1001,18 @@ class SyntheticTumorDataset(BaseDataset):
             "dosage": (0.0, 1.0)
         }
 
+        if equation == "wilkerson_dynamic":
+            TUMOR_DATA_FEATURE_RANGES={
+            "age": (20, 80),
+            "weight": (40, 100),
+            "initial_tumor_volume": (0.1, 0.5),
+            "start_time": (0.0, 1.0),
+            "dosage": (0.0, 1.0),
+            "blood_pressure": (130, 15, 30),
+            "oxygen_saturation" : (93, 3, 30),
+            "glucose_levels": (120, 30, 30)
+        }
+
         # Create the random number generator
         gen=np.random.default_rng(seed)
 
@@ -957,12 +1031,24 @@ class SyntheticTumorDataset(BaseDataset):
         # Sample chemotherapy dosage
         dosage=gen.uniform(
             TUMOR_DATA_FEATURE_RANGES['dosage'][0], TUMOR_DATA_FEATURE_RANGES['dosage'][1], size=n_samples)
+        
+        if equation == "wilkerson_dynamic":
+            blood_pressure = gen.normal(
+                TUMOR_DATA_FEATURE_RANGES['blood_pressure'][0], TUMOR_DATA_FEATURE_RANGES['blood_pressure'][1], size=(n_samples, TUMOR_DATA_FEATURE_RANGES['blood_pressure'][2]))
+            oxygen_saturation = gen.uniform(
+                TUMOR_DATA_FEATURE_RANGES['oxygen_saturation'][0], TUMOR_DATA_FEATURE_RANGES['oxygen_saturation'][1], size=(n_samples, TUMOR_DATA_FEATURE_RANGES['oxygen_saturation'][2]))
+            glucose_levels = gen.normal(
+                TUMOR_DATA_FEATURE_RANGES['glucose_levels'][0], TUMOR_DATA_FEATURE_RANGES['glucose_levels'][1], size=(n_samples, TUMOR_DATA_FEATURE_RANGES['glucose_levels'][2]))
+
 
         # Combine the static features into a single array
         if equation == "wilkerson":
             X=np.stack((age, weight, tumor_volume, dosage), axis=1)
         elif equation == "geng":
             X=np.stack((age, weight, tumor_volume, start_time, dosage), axis=1)
+        elif equation == "wilkerson_dynamic":
+            X=np.stack((age, weight, tumor_volume, dosage))
+            X_dynamic = np.stack((blood_pressure, oxygen_saturation, glucose_levels), axis=2)
 
         # Create the time points
         ts=[np.linspace(0.0, time_horizon, n_time_steps)
@@ -978,6 +1064,11 @@ class SyntheticTumorDataset(BaseDataset):
                 age, weight, tumor_volume, dosage=X[i, :]
             elif equation == "geng":
                 age, weight, tumor_volume, start_time, dosage=X[i, :]
+            elif equation == "wilkerson_dynamic":
+                age, weight, tumor_volume, dosage = X[i, :]
+                blood_pressure_i = X_dynamic['blood_pressure'][i, :, 0]
+                oxygen_saturation_i = X_dynamic['oxygen_saturation'][i, :, 1]
+                glucose_levels_i = X_dynamic['glucose_levels'][i, :, 2]
 
             if equation == "wilkerson":
                 ys.append(SyntheticTumorDataset._tumor_volume_2(
@@ -985,10 +1076,14 @@ class SyntheticTumorDataset(BaseDataset):
             elif equation == "geng":
                 ys.append(SyntheticTumorDataset._tumor_volume(ts[i], age, weight,
                         tumor_volume, start_time, dosage))
+            elif equation == "wilkerson_dynamic":
+                ys.append(SyntheticTumorDataset._tumor_volume_3(
+                    ts[i], age, weight, tumor_volume, dosage, blood_pressure_i, oxygen_saturation_i, glucose_levels_i))
 
             # Add noise to the tumor volumes
             ys[i] += gen.normal(0.0, noise_std, size=n_time_steps)
-
+        if equation == "wilkerson_dynamic":
+            return X, X_dynamic, ts, ys
         return X, ts, ys
 
 
