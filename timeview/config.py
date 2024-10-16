@@ -97,7 +97,7 @@ class DynamicConfig(Config):
                  seed=42,
                  encoder={'hidden_sizes': [32, 64, 32],
                           'activation': 'relu', 'dropout_p': 0.2},
-                 dynamic_encoder={'hidden_size': 128,  # Hidden size of the RNN
+                 dynamic_encoder={'hidden_size': 64,  # Hidden size of the RNN
                                   'rnn_layers': 2,  # Number of RNN layers
                                   'dropout_p': 0.2,  # Dropout probability for RNN
                                   'rnn_type': 'lstm'},

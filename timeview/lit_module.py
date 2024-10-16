@@ -144,7 +144,7 @@ class LitTTSDynamic(pl.LightningModule):
         self.model = TTSDynamic(config)
         self.loss_fn = torch.nn.MSELoss()
         self.lr = self.config.training.lr
-        self.contrastive_loss_weight = 0.1
+        self.contrastive_loss_weight = 0.5
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         # def forward(self, batch, batch_idx, dataloader_idx=0):
