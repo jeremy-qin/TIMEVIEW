@@ -480,7 +480,7 @@ class TTSDynamicDataset(TTSDataset):
         self.X = torch.from_numpy(np.array(self.X)).float()
         dynamic_features = []
         for col in self.X_dynamic.columns:
-            print([len(lst) for lst in self.X_dynamic.iloc[:, 0]])
+            # print([len(lst) for lst in self.X_dynamic.iloc[:, 0]])
 
             feature_array = np.array(self.X_dynamic[col].tolist(), dtype=np.float32)
             dynamic_features.append(feature_array)

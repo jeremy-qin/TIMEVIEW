@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import glob
 from scipy.stats import beta
+from timeview.knot_selection import *
+from experiments.dynamic_modeling import *
 
 def save_dataset(dataset_name, dataset_builder, dataset_dictionary, notes="", dataset_description_path="dataset_descriptions"):
     # Check if a dataset description directory exists. If not, create it.
@@ -824,9 +826,9 @@ class SyntheticTumorDataset(BaseDataset):
                 "weight": (40, 100),
                 "initial_tumor_volume": (0.1, 0.5),
                 "dosage": (0.0, 1.0),
-                "blood_pressure": (130, 15, 30),
-                "oxygen_saturation" : (93, 3, 30),
-                "glucose_levels": (120, 30, 30)
+                "blood_pressure": (130, 15, 60),
+                "oxygen_saturation" : (93, 3, 60),
+                "glucose_levels": (120, 30, 60)
                 }
 
     def get_feature_names(self):
@@ -1015,9 +1017,9 @@ class SyntheticTumorDataset(BaseDataset):
             "initial_tumor_volume": (0.1, 0.5),
             "start_time": (0.0, 1.0),
             "dosage": (0.0, 1.0),
-            "blood_pressure": (130, 15, 30),
-            "oxygen_saturation" : (93, 3, 30),
-            "glucose_levels": (120, 30, 30)
+            "blood_pressure": (130, 15, 60),
+            "oxygen_saturation" : (93, 3, 60),
+            "glucose_levels": (120, 30, 60)
         }
 
         # Create the random number generator
@@ -1060,7 +1062,8 @@ class SyntheticTumorDataset(BaseDataset):
         # Create the time points
         ts=[np.linspace(0.0, time_horizon, n_time_steps)
             for i in range(n_samples)]
-
+        
+        ts_dynamic = [np.linspace(0.0, 60, 60) for i in range(n_samples)]
         # Create the tumor volumes
         ys=[]
 
@@ -1089,8 +1092,54 @@ class SyntheticTumorDataset(BaseDataset):
 
             # Add noise to the tumor volumes
             ys[i] += gen.normal(0.0, noise_std, size=n_time_steps)
+
+
+        # blood_pressure_knots = calculate_knot_placement(ts_dynamic, blood_pressure, n_internal_knots=9, T=30)
+        # oxygen_saturation_knots = calculate_knot_placement(ts_dynamic, oxygen_saturation, n_internal_knots=9, T=30)
+        # glucose_levels_knots = calculate_knot_placement(ts_dynamic, glucose_levels, n_internal_knots=9, T=30)
+
+        if equation == "wilkerson_dynamic":
+            blood_pressure_knots = get_regular_knots(n_time_steps, 8)
+            oxygen_saturation_knots = get_regular_knots(n_time_steps, 8)
+            glucose_levels_knots = get_regular_knots(n_time_steps, 8)
+
+            bp_splines, bp_first_deriv, bp_second_deriv = fit_cubic_splines_for_all_samples(ts_dynamic, blood_pressure, blood_pressure_knots)
+            os_splines, os_first_deriv, os_second_deriv = fit_cubic_splines_for_all_samples(ts_dynamic, oxygen_saturation, oxygen_saturation_knots)
+            gl_splines, gl_first_deriv, gl_second_deriv = fit_cubic_splines_for_all_samples(ts_dynamic, glucose_levels, glucose_levels_knots)
+
+            bp_encoded = []
+            os_encoded = []
+            gl_encoded = []
+
+            for i in range(n_samples):
+                bp_vector = encode_dynamic_feature_as_single_vector(bp_first_deriv[i], bp_second_deriv[i])
+                os_vector = encode_dynamic_feature_as_single_vector(os_first_deriv[i], os_second_deriv[i])
+                gl_vector = encode_dynamic_feature_as_single_vector(gl_first_deriv[i], gl_second_deriv[i])
+                
+                bp_vector_flat = bp_vector.flatten()
+                os_vector_flat = os_vector.flatten()
+                gl_vector_flat = gl_vector.flatten()
+
+                n_intervals = len(blood_pressure_knots) - 1
+                bp_properties = calculate_transition_properties(bp_splines[i], blood_pressure_knots, n_intervals)
+                os_properties = calculate_transition_properties(os_splines[i], oxygen_saturation_knots, n_intervals)
+                gl_properties = calculate_transition_properties(gl_splines[i], glucose_levels_knots, n_intervals)
+
+                bp_properties_flat = np.array(bp_properties).flatten()
+                os_properties_flat = np.array(os_properties).flatten()
+                gl_properties_flat = np.array(gl_properties).flatten()
+
+                bp_encoded.append(np.concatenate([bp_vector_flat, bp_properties_flat]))
+                os_encoded.append(np.concatenate([os_vector_flat, os_properties_flat]))
+                gl_encoded.append(np.concatenate([gl_vector_flat, gl_properties_flat]))
+
+                # bp_encoded.append(bp_vector_flat)
+                # os_encoded.append(os_vector_flat)
+                # gl_encoded.append(gl_vector_flat)
+
+            X_dynamic = np.stack((bp_encoded, os_encoded, gl_encoded), axis=2)
+
         if equation == "wilkerson_dynamic":
             return X, X_dynamic, ts, ys
         return X, ts, ys
-
-
+    

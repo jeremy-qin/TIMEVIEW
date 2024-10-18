@@ -62,7 +62,7 @@ class DynamicEncoder(torch.nn.Module):
         """
         super().__init__()
         self.config = config
-        self.n_dynamic_features = config.n_features_dynamic  # Number of dynamic features
+        self.n_dynamic_features = config.n_features_dynamic * 1 # Number of dynamic features
         self.hidden_size = config.dynamic_encoder.hidden_size  # Hidden size of the RNN
         self.rnn_layers = config.dynamic_encoder.rnn_layers  # Number of RNN layers
         self.dropout_p = config.dynamic_encoder.dropout_p  # Dropout probability
@@ -110,7 +110,10 @@ class DynamicEncoder(torch.nn.Module):
             Latent representation of dynamic features
         """
         # Pass the input through the RNN (LSTM or GRU)
-        x = x.transpose(1,2)
+        x = x.permute(0,2,1)
+        # print(x.shape)
+        # batch_size, n_dynamic_features, n_intervals, n_derivatives = x.shape
+        # x = x.view(batch_size, n_intervals, n_dynamic_features * n_derivatives) 
         rnn_output, (h_n, c_n) = self.rnn(x) if self.rnn_type == 'lstm' else self.rnn(x)
 
         # We use the last hidden state (h_n) from the RNN layers as the representation
